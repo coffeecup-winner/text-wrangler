@@ -6,8 +6,10 @@ module Text.Wrangler where
 import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.State
-import qualified Data.Text.Lazy as T
-import qualified Data.Text.Lazy.IO as T
+import Data.List
+import Data.Maybe
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import qualified System.FilePath.Find as F
 
@@ -46,9 +48,7 @@ wrangle :: W a () -> IO ()
 wrangle w = do
     let (WData values actions) = execState w (WData (return []) [])
     readValues <- values
-    sequence $ (flip (<$>)) actions $ \action -> do
-        mapM action readValues
-    return ()
+    foldM_ forM readValues actions
 
 line :: LineSelector
 line = LineSelector
@@ -69,10 +69,33 @@ currentFolder :: W Folder ()
 currentFolder = do
     put $ WData (return [Folder "."]) []
 
-output :: W T.Text ()
-output = do
-    let action = \str -> do
-            T.putStrLn str
-            return str
+addAction :: Action a -> W a ()
+addAction action = do
     (WData values actions) <- get
     put $ WData values (actions ++ [action])
+
+output :: W T.Text ()
+output = addAction $ \text -> do
+    T.putStrLn text
+    return text
+
+type CharLocation = T.Text -> [Int]
+
+add :: String -> CharLocation -> W T.Text ()
+add str loc = addAction $ \text -> do
+    let indices = loc text
+    let increments = zipWith (-) indices (0:indices)
+    let split [] acc t = t:acc
+        split (i:is) acc t = split is ((T.take i t):acc) (T.drop i t)
+    return . T.concat . intersperse (T.pack str) . reverse $ split increments [] text
+
+before :: String -> CharLocation
+before str = \text -> T.length . fst <$> T.breakOnAll (T.pack str) text
+
+after :: String -> CharLocation
+after str = \text -> (+ length str) <$> before str text
+
+around :: String -> CharLocation
+around str = \text -> merge (before str text) (after str text)
+    where merge [] [] = []
+          merge (l:ls) (r:rs) = l:r:merge ls rs
